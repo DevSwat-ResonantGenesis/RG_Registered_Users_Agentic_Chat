@@ -1,0 +1,40 @@
+  # ── RG Registered Users Agentic Chat (standalone) ──
+  rg_agentic_chat:
+    build:
+      context: ./RG_Registered_Users_Agentic_Chat
+      dockerfile: Dockerfile
+    container_name: rg_agentic_chat
+    restart: unless-stopped
+    ports:
+      - "8095:8000"
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://postgres:${POSTGRES_PASSWORD}@db:5432/resonant_agents
+      - CODE_VISUALIZER_SERVICE_URL=http://code_visualizer_service:8000
+      - MEMORY_SERVICE_URL=http://memory_service:8000
+      - AGENT_ENGINE_URL=http://agent_engine_service:8000
+      - AUTH_SERVICE_URL=http://auth_service:8000
+      - STATE_PHYSICS_URL=http://state_physics_service:8091
+      - GATEWAY_URL=http://gateway:8000
+      - ED_SERVICE_URL=http://ed_service:8000
+      - RABBIT_SERVICE_URL=http://rabbit_api_service:8000
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - TAVILY_API_KEY=${TAVILY_API_KEY}
+      - SERPAPI_KEY=${SERPAPI_KEY}
+      - PERPLEXITY_API_KEY=${PERPLEXITY_API_KEY}
+      - AUTH_SENDGRID_API_KEY=${AUTH_SENDGRID_API_KEY}
+      - AUTH_SMTP_USER=${AUTH_SMTP_USER}
+      - AUTH_INTERNAL_SERVICE_KEY=${AUTH_INTERNAL_SERVICE_KEY}
+    volumes:
+      # Shared modules via volume mount (same as agent_engine_service)
+      - /home/deploy/RG_UnifiedLLMClient/src/rg_llm:/app/rg_llm:ro
+      - /home/deploy/RG_Unified_Tool_Registry/rg_tool_registry:/app/rg_tool_registry:ro
+    depends_on:
+      - db
+      - memory_service
+      - agent_engine_service
+      - auth_service
+    networks:
+      - resonant-network
