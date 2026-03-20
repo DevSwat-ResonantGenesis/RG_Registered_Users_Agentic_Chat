@@ -2,20 +2,28 @@
 
 > **Part of the [ResonantGenesis](https://dev-swat.com) platform** — standalone microservice for authenticated AI assistant chat.
 
-Full-featured agentic AI assistant for **registered users** on the ResonantGenesis platform. Provides multi-provider LLM conversations with 130+ tools, persistent memory, BYOK API keys, and real-time SSE streaming — extracted from the monolith `agent_engine_service` as a clean standalone module.
+[![Status: Production](https://img.shields.io/badge/Status-Production-brightgreen.svg)]()
+[![Docker: rg_agentic_chat](https://img.shields.io/badge/Docker-rg__agentic__chat-blue.svg)]()
+[![Port: 8000](https://img.shields.io/badge/Port-8000-orange.svg)]()
+[![Handlers: 112](https://img.shields.io/badge/Handlers-112-green.svg)]()
+[![Providers: 4](https://img.shields.io/badge/Providers-4-purple.svg)]()
+[![License: RG Source Available](https://img.shields.io/badge/License-RG%20Source%20Available-blue.svg)](LICENSE.txt)
+
+Full-featured agentic AI assistant for **registered users** on the ResonantGenesis platform. Provides multi-provider LLM conversations with 112+ handler tools, persistent memory, BYOK API keys, and real-time SSE streaming. Deployed as standalone Docker container `rg_agentic_chat`.
 
 ## Architecture
 
 ```
-User → Nginx → Gateway (auth) → rg_agentic_chat (this service)
-                                     ├── LLM Providers (OpenAI / Anthropic / Gemini / Groq)
+User → Nginx → Gateway (auth) → rg_agentic_chat (this service, port 8000)
                                      ├── rg_llm (volume-mounted shared LLM client)
+                                     │    ├── OpenAI, Anthropic, Gemini, Groq
+                                     │    └── Automatic fallback chain + BYOK
                                      ├── rg_tool_registry (volume-mounted tool registry)
                                      ├── memory_service (smart memory retrieval)
                                      ├── auth_service (BYOK key fetching)
-                                     ├── code_visualizer_service
-                                     ├── agent_engine_service
-                                     ├── state_physics_service
+                                     ├── rg_ast_analysis (code analysis, port 8000)
+                                     ├── rg_users_invarients_sim (Hash Sphere, port 8091)
+                                     ├── agent_engine_service (agent execution)
                                      └── 15+ other platform microservices (via HTTP proxy)
 ```
 
@@ -213,12 +221,12 @@ requirements.txt               # Python dependencies
 
 ## Gateway Integration
 
-Update gateway to proxy agentic chat to this service:
+The gateway proxies all agentic chat requests to this standalone service:
 ```
 /api/v1/agentic-chat/* → http://rg_agentic_chat:8000/agentic-chat/*
 ```
 
-This replaces the current routing to `agent_engine_service`.
+This replaced the old routing to `agent_engine_service` — the agentic chat router was removed from the monolith.
 
 ## Security
 
@@ -232,17 +240,23 @@ This replaces the current routing to `agent_engine_service`.
 
 | Module | Repo | Relationship |
 |--------|------|-------------|
-| Public Guest Chat | `RG_Public-Guest-Agentic_Chat` | Unauthenticated variant (14 tools, no DB) |
-| Unified LLM Client | `RG_UnifiedLLMClient` | Shared LLM provider abstraction (volume-mounted) |
-| Unified Tool Registry | `RG_Unified_Tool_Registry-Observability_Module` | Tool definitions + observability (volume-mounted) |
-| Resonant IDE | `RG_IDE` | IDE client that calls this service for AI chat |
+| Public Guest Chat | [`RG_Public-Guest-Agentic_Chat`](https://github.com/DevSwat-ResonantGenesis/RG_Public-Guest-Agentic_Chat) | Unauthenticated variant (14 tools, no DB, stateless) |
+| Unified LLM Client | [`RG_UnifiedLLMClient`](https://github.com/DevSwat-ResonantGenesis/RG_UnifiedLLMClient) | Multi-provider LLM abstraction (volume-mounted) |
+| Unified Tool Registry | [`RG_Unified_Tool_Registry-Observability_Module`](https://github.com/DevSwat-ResonantGenesis/RG_Unified_Tool_Registry-Observability_Module) | Tool definitions + observability (volume-mounted) |
+| AST Analysis | [`RG_AST_analysis`](https://github.com/DevSwat-ResonantGenesis/RG_AST_analysis) | Code analysis — tools proxy to this service |
+| Users Invariants SIM | [`RG_Users_Invarients_SIM`](https://github.com/DevSwat-ResonantGenesis/RG_Users_Invarients_SIM) | Hash Sphere state physics — tools proxy to this service |
+| Internal Invariants SIM | [`RG_Internal_Invarients_SIM`](https://github.com/DevSwat-ResonantGenesis/RG_Internal_Invarients_SIM) | RARA governance (admin-only, not directly called) |
+| Resonant IDE | [`RG_IDE`](https://github.com/DevSwat-ResonantGenesis/RG_IDE) | IDE cloud mode calls `/api/v1/agentic-chat/stream` on this service |
 
 ## Deployment Status
 
-- **Extracted from**: `genesis2026_production_backend/agent_engine_service` (agentic chat router)
-- **Production**: Not yet deployed as standalone — currently runs inside `agent_engine_service`
-- **Target**: Replace the agentic chat router in `agent_engine_service` with this standalone service
+- **Status**: ✅ **Production** — deployed as standalone Docker container `rg_agentic_chat`
+- **Extracted from**: `genesis2026_production_backend/agent_engine_service` (`routers_agentic_chat.py` — removed from monolith)
+- **Server path**: `/home/deploy/RG_Registered_Users_Agentic_Chat` (cloned from DevSwat GitHub)
+- **Docker service**: `rg_agentic_chat` in `docker-compose.unified.yml`
+- **Port**: 8000 (internal Docker network)
 - **Database**: Shares `resonant_agents` PostgreSQL database with `agent_engine_service`
+- **Health**: 112 handlers, 4 providers (OpenAI, Groq, Anthropic, Gemini)
 
 ---
 
