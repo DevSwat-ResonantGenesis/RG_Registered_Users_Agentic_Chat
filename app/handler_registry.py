@@ -87,7 +87,7 @@ CUSTOM_HANDLERS = {
     "_custom_hs_list_anchors": _custom_hs_list_anchors,
     "_custom_hs_hash": _custom_hs_hash,
     "_custom_hs_resonance": _custom_hs_resonance,
-    # Code Visualizer
+    # AST Analysis (standalone rg_ast_analysis service)
     "_custom_cv_scan": _custom_cv_scan,
     "_custom_cv_full_analysis": _custom_cv_full_analysis,
     "_custom_cv_trace": _custom_cv_trace,

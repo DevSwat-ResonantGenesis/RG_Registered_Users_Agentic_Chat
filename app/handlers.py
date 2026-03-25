@@ -85,7 +85,7 @@ async def fetch_user_byok_keys(user_id: str) -> Dict[str, str]:
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# Code Visualizer handlers — proxy to code_visualizer_service
+# AST Analysis handlers — proxy to standalone rg_ast_analysis service
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 async def _custom_cv_scan(args: dict, ctx: dict) -> dict:
@@ -135,10 +135,10 @@ async def _custom_cv_scan(args: dict, ctx: dict) -> dict:
                 "sample_functions": [{"name": f.get("label", f.get("id", "")), "file": f.get("file", "")} for f in functions[:20]],
             }
             if stats.get("total_functions", len(functions)) == 0 and len(nodes) > 0:
-                result["note"] = f"Analysis found {len(nodes)} nodes total. Use code_visualizer_report for full breakdown."
+                result["note"] = f"Analysis found {len(nodes)} nodes total. Use ast_analysis_report for full breakdown."
             return result
     except Exception as e:
-        return {"error": f"Code Visualizer scan failed: {str(e)[:300]}"}
+        return {"error": f"AST Analysis scan failed: {str(e)[:300]}"}
 
 
 async def _custom_cv_trace(args: dict, ctx: dict) -> dict:

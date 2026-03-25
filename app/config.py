@@ -7,7 +7,7 @@ import os
 
 
 # ── Internal Docker service URLs ──
-CV_SERVICE_URL = os.getenv("CODE_VISUALIZER_SERVICE_URL", "http://code_visualizer_service:8000")
+CV_SERVICE_URL = os.getenv("AST_ANALYSIS_SERVICE_URL") or os.getenv("CODE_VISUALIZER_SERVICE_URL", "http://rg_ast_analysis:8000")
 MEMORY_SERVICE_URL = os.getenv("MEMORY_SERVICE_URL", "http://memory_service:8000")
 AGENT_ENGINE_URL = os.getenv("AGENT_ENGINE_URL", "http://agent_engine_service:8000")
 AUTH_SERVICE_URL = os.getenv("AUTH_SERVICE_URL", "http://auth_service:8000")
