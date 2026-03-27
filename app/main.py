@@ -302,7 +302,7 @@ async def agentic_chat_stream(body: AgenticChatRequest, request: Request):
         user_role = request.headers.get("x-user-role", "user")
         is_superuser = request.headers.get("x-is-superuser", "false") == "true"
         unlimited = request.headers.get("x-unlimited-credits", "false") == "true"
-        is_privileged = is_superuser or unlimited or user_role.lower() in {"owner", "platform_owner", "admin", "superuser"}
+        is_privileged = is_superuser or unlimited or user_role.lower() in {"platform_owner", "admin", "superuser"}
 
         # BYOK: user has their own LLM key for the chosen provider — skip LLM credits
         _norm_prov = _pre_provider.replace("chatgpt", "openai").replace("claude", "anthropic")
@@ -316,7 +316,8 @@ async def agentic_chat_stream(body: AgenticChatRequest, request: Request):
                 yield f"event: error\ndata: {json.dumps({'error': 'Insufficient credits. Please upgrade your plan or purchase credits to continue using the AI assistant.'})}\n\n"
                 return
             elif isinstance(credit_info["balance"], (int, float)) and 0 < credit_info["balance"] < 3000:
-                yield f"event: credit_warning\ndata: {json.dumps({'type': 'low', 'balance': credit_info['balance'], 'message': f'Low credit balance: {credit_info["balance"]} credits remaining.'})}\n\n"
+                _bal = credit_info['balance']
+                yield f"event: credit_warning\ndata: {json.dumps({'type': 'low', 'balance': _bal, 'message': f'Low credit balance: {_bal} credits remaining.'})}\n\n"
 
         logger.info(f"[AgenticChat] preferred={_pre_provider} tools={len(native_tools)} user={user_id} byok={list(merged_keys.keys())} byok_active={has_byok_for_provider}")
         yield f"event: status\ndata: {json.dumps({'status': 'started', 'tools_available': len(native_tools), 'conversation_id': conv_id, 'provider': _pre_provider})}\n\n"
@@ -364,7 +365,9 @@ async def agentic_chat_stream(body: AgenticChatRequest, request: Request):
                             yield f"event: error\ndata: {json.dumps({'error': 'Insufficient credits. Your balance reached zero.'})}\n\n"
                             break
                         if cr.get("warning"):
-                            yield f"event: credit_warning\ndata: {json.dumps({'type': cr['warning'], 'balance': cr['balance'], 'message': f'Credit balance: {cr["balance"]} remaining' if cr['warning'] == 'low' else 'Credits exhausted!'})}\n\n"
+                            _w_bal = cr.get('balance', 0)
+                            _w_msg = f'Credit balance: {_w_bal} remaining' if cr['warning'] == 'low' else 'Credits exhausted!'
+                            yield f"event: credit_warning\ndata: {json.dumps({'type': cr['warning'], 'balance': _w_bal, 'message': _w_msg})}\n\n"
 
                 if tool_calls:
                     # Append assistant message in OpenAI format (rg_llm handles conversion)
