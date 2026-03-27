@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s: %(message)s")
 
 from .config import (
-    MEMORY_SERVICE_URL,
+    MEMORY_SERVICE_URL, BILLING_SERVICE_URL,
     PROVIDER_MAX_CONTEXT, BUDGET_SYSTEM, BUDGET_HISTORY,
 )
 from .persistence import (
@@ -37,6 +37,83 @@ from .handler_registry import CUSTOM_HANDLERS, TOOL_DEFS, _registry, _agentic_ob
 
 # Smart tool cap — 30 works across all providers (Groq limit)
 MAX_TOOLS_CAP = 30
+
+# Credit cost per LLM call (platform key usage)
+CREDIT_COST_LLM_CALL = 20
+CREDIT_COST_TOOL_CALL = 2
+
+
+async def _check_credits(user_id: str) -> dict:
+    """Check user's credit balance. Returns {balance, has_credits, unlimited}."""
+    if not user_id or user_id == "anonymous":
+        return {"balance": 0, "has_credits": False, "unlimited": False}
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(
+                f"{BILLING_SERVICE_URL}/billing/credits/balance/{user_id}",
+                timeout=5.0,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                return {
+                    "balance": data.get("balance", 0),
+                    "has_credits": data.get("balance", 0) > 0,
+                    "unlimited": False,
+                }
+    except Exception as e:
+        logger.warning(f"[Credits] Balance check failed: {e}")
+    # If billing service is down, allow the request
+    return {"balance": -1, "has_credits": True, "unlimited": False}
+
+
+async def _deduct_credits(
+    user_id: str,
+    amount: int,
+    action: str,
+    description: str,
+    user_role: str = "user",
+    is_superuser: bool = False,
+    unlimited_credits: bool = False,
+) -> dict:
+    """Deduct credits via billing service. Returns {balance, deducted, warning}."""
+    if not user_id or user_id == "anonymous":
+        return {"balance": 0, "deducted": 0}
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.post(
+                f"{BILLING_SERVICE_URL}/billing/credits/deduct",
+                json={
+                    "amount": amount,
+                    "reference_type": action,
+                    "description": description,
+                },
+                headers={
+                    "X-User-Id": user_id,
+                    "X-User-Role": user_role,
+                    "X-Is-Superuser": str(is_superuser).lower(),
+                    "X-Unlimited-Credits": str(unlimited_credits).lower(),
+                    "Content-Type": "application/json",
+                },
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                balance = data.get("balance_after", 0)
+                warning = None
+                if isinstance(balance, (int, float)):
+                    if balance <= 0:
+                        warning = "zero"
+                    elif balance < 3000:
+                        warning = "low"
+                logger.info(f"\U0001f4b3 Deducted {amount} credits from {user_id[:8]}... balance={balance}")
+                return {"balance": balance, "deducted": amount, "warning": warning}
+            elif resp.status_code == 402:
+                logger.warning(f"\u274c Insufficient credits for {user_id[:8]}...")
+                return {"balance": 0, "deducted": 0, "error": "insufficient_credits"}
+            else:
+                logger.warning(f"[Credits] Deduction returned {resp.status_code}")
+    except Exception as e:
+        logger.warning(f"[Credits] Deduction failed: {e}")
+    return {"balance": -1, "deducted": 0}
 
 app = FastAPI(title="RG Registered Users Agentic Chat", version="1.0.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
@@ -221,7 +298,27 @@ async def agentic_chat_stream(body: AgenticChatRequest, request: Request):
         byok_keys = await fetch_user_byok_keys(user_id)
         merged_keys = {**byok_keys, **(body.user_api_keys or {})}
 
-        logger.info(f"[AgenticChat] preferred={_pre_provider} tools={len(native_tools)} user={user_id} byok={list(merged_keys.keys())}")
+        # Determine if user is privileged (skip credit checks)
+        user_role = request.headers.get("x-user-role", "user")
+        is_superuser = request.headers.get("x-is-superuser", "false") == "true"
+        unlimited = request.headers.get("x-unlimited-credits", "false") == "true"
+        is_privileged = is_superuser or unlimited or user_role.lower() in {"owner", "platform_owner", "admin", "superuser"}
+
+        # BYOK: user has their own LLM key for the chosen provider — skip LLM credits
+        _norm_prov = _pre_provider.replace("chatgpt", "openai").replace("claude", "anthropic")
+        has_byok_for_provider = bool(merged_keys.get(_norm_prov))
+
+        # Pre-check credits (skip for privileged users)
+        if not is_privileged and user_id != "anonymous":
+            credit_info = await _check_credits(user_id)
+            if credit_info["balance"] == 0 and not credit_info["has_credits"]:
+                yield f"event: credit_warning\ndata: {json.dumps({'type': 'zero', 'balance': 0, 'message': 'You have no credits remaining. Please upgrade your plan or purchase credits.'})}\n\n"
+                yield f"event: error\ndata: {json.dumps({'error': 'Insufficient credits. Please upgrade your plan or purchase credits to continue using the AI assistant.'})}\n\n"
+                return
+            elif isinstance(credit_info["balance"], (int, float)) and 0 < credit_info["balance"] < 3000:
+                yield f"event: credit_warning\ndata: {json.dumps({'type': 'low', 'balance': credit_info['balance'], 'message': f'Low credit balance: {credit_info["balance"]} credits remaining.'})}\n\n"
+
+        logger.info(f"[AgenticChat] preferred={_pre_provider} tools={len(native_tools)} user={user_id} byok={list(merged_keys.keys())} byok_active={has_byok_for_provider}")
         yield f"event: status\ndata: {json.dumps({'status': 'started', 'tools_available': len(native_tools), 'conversation_id': conv_id, 'provider': _pre_provider})}\n\n"
 
         try:
@@ -252,6 +349,22 @@ async def agentic_chat_stream(body: AgenticChatRequest, request: Request):
                 total_tokens += usage.get("total_tokens", usage.get("input_tokens", 0) + usage.get("output_tokens", 0))
                 text_content = response.content or ""
                 tool_calls = response.tool_calls or []
+
+                # Deduct credits for LLM call (skip for BYOK users + privileged)
+                if not is_privileged and user_id != "anonymous":
+                    llm_cost = 0 if has_byok_for_provider else CREDIT_COST_LLM_CALL
+                    if llm_cost > 0:
+                        cr = await _deduct_credits(
+                            user_id, llm_cost, "chat_message",
+                            f"AI Assistant: {_pre_provider}/{model} loop {loop_count}",
+                            user_role=user_role, is_superuser=is_superuser, unlimited_credits=unlimited,
+                        )
+                        if cr.get("error") == "insufficient_credits":
+                            yield f"event: credit_warning\ndata: {json.dumps({'type': 'zero', 'balance': 0, 'message': 'Credits exhausted during conversation.'})}\n\n"
+                            yield f"event: error\ndata: {json.dumps({'error': 'Insufficient credits. Your balance reached zero.'})}\n\n"
+                            break
+                        if cr.get("warning"):
+                            yield f"event: credit_warning\ndata: {json.dumps({'type': cr['warning'], 'balance': cr['balance'], 'message': f'Credit balance: {cr["balance"]} remaining' if cr['warning'] == 'low' else 'Credits exhausted!'})}\n\n"
 
                 if tool_calls:
                     # Append assistant message in OpenAI format (rg_llm handles conversion)
@@ -329,7 +442,12 @@ async def agentic_chat_stream(body: AgenticChatRequest, request: Request):
                     break
 
             elapsed = round(time.time() - start_time, 2)
-            yield f"event: done\ndata: {json.dumps({'loops': loop_count, 'tokens': total_tokens, 'elapsed_seconds': elapsed, 'provider': provider, 'model': model, 'tools_called_count': session_tracker['total_tool_calls']})}\n\n"
+            # Final balance check for done event
+            final_balance = None
+            if not is_privileged and user_id != "anonymous":
+                final_info = await _check_credits(user_id)
+                final_balance = final_info.get("balance")
+            yield f"event: done\ndata: {json.dumps({'loops': loop_count, 'tokens': total_tokens, 'elapsed_seconds': elapsed, 'provider': provider, 'model': model, 'tools_called_count': session_tracker['total_tool_calls'], 'credits_balance': final_balance, 'byok_active': has_byok_for_provider})}\n\n"
         except Exception as e:
             logger.exception("Agentic chat error")
             yield f"event: error\ndata: {json.dumps({'error': str(e)[:500]})}\n\n"
